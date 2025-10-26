@@ -4,7 +4,8 @@ import os
 import re
 import time
 import unicodedata
-from collections import defaultdict
+import math
+from collections import defaultdict, Counter
 
 from itertools import combinations
 from ortools.sat.python import cp_model
@@ -21,9 +22,19 @@ affinity_overrides = pd.read_csv('affinity_overrides.csv')
 # -------------------------
 # Parâmetros do evento
 # -------------------------
-ROUNDS = 4
-TABLES = 17
-SEATS_PER_TABLE = 4
+def _env_int(var, default):
+    val = os.getenv(var)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
+
+ROUNDS = _env_int('NW_ROUNDS', 4)
+TABLES = _env_int('NW_TABLES', 17)
+SEATS_PER_TABLE = _env_int('NW_SEATS_PER_TABLE', 4)
 
 # -------------------------
 # Pesos (ajuste fino)
@@ -38,8 +49,8 @@ W_OVER = 800
 DEFAULT_SIM_SAME = 0.30
 DEFAULT_SIM_DIFF = 0.55
 
-MAX_TIME_S = 30
-N_WORKERS = 8
+MAX_TIME_S = _env_int('NW_MAX_TIME_S', 120)
+N_WORKERS = _env_int('NW_N_WORKERS', 8)
 
 # -------------------------
 # Normalização por alias
@@ -139,9 +150,15 @@ dfP.loc[dfP['mesa_fixa'].notna(), 'fixo'] = 1
 
 # sanity básico
 N = len(dfP)
-if N != TABLES * SEATS_PER_TABLE:
-    print(f"[Aviso] Há {N} participantes, mas a configuração espera {TABLES*SEATS_PER_TABLE}. "
-          f"Ainda assim o solver tentará alocar exatamente 4 por mesa por rodada.")
+total_slots = TABLES * SEATS_PER_TABLE
+if N > total_slots:
+    raise RuntimeError(
+        f"Existem {N} participantes para apenas {total_slots} vagas por rodada. "
+        "Aumente o número de mesas ou assentos antes de rodar o solver.")
+if N != total_slots:
+    print(
+        f"[Aviso] Há {N} participantes, mas a configuração prevê {total_slots} lugares por rodada. "
+        "Mesas serão mantidas com 4 participantes por rodada; haverá cadeiras ociosas.")
 
 # mapeamentos
 P_ids = list(dfP[id_col].tolist())
@@ -186,10 +203,69 @@ must_together_pairs = get_pair_df(must_together)
 must_avoid_pairs    = get_pair_df(must_avoid)
 
 # -------------------------
+# Diagnóstico informativo
+# -------------------------
+def diagnostic_report():
+    print("\n=== Diagnóstico das entradas ===")
+    print(f"Participantes: {N}")
+    print(
+        f"Mesas configuradas: {TABLES} | Assentos/mesa: {SEATS_PER_TABLE} | "
+        f"Vagas totais por rodada: {total_slots}")
+    print(
+        f"Pares must_together: {len(must_together_pairs)} | "
+        f"pares must_avoid: {len(must_avoid_pairs)}")
+
+    if fixed_info:
+        print("- Participantes fixos por mesa:")
+        fixed_by_table = defaultdict(list)
+        for idx, mesa in fixed_info.items():
+            fixed_by_table[mesa].append(idx)
+        for mesa in sorted(fixed_by_table):
+            nomes = ", ".join(names[i] for i in fixed_by_table[mesa])
+            print(f"  Mesa {mesa}: {nomes}")
+    else:
+        print("- Nenhum participante possui mesa fixa.")
+
+    limit_mt = ROUNDS * (SEATS_PER_TABLE - 1)
+    mt_degree = Counter()
+    for a, b in must_together_pairs:
+        mt_degree[a] += 1
+        mt_degree[b] += 1
+
+    alertas = []
+    for idx, qtd in mt_degree.items():
+        if qtd > limit_mt and idx not in fixed_info:
+            alertas.append(
+                f"{names[idx]} precisa encontrar {qtd} parceiros must_together, acima do limite teórico de {limit_mt} em {ROUNDS} rodadas.")
+        elif idx in fixed_info and qtd > limit_mt:
+            alertas.append(
+                f"{names[idx]} (fixo na mesa {fixed_info[idx]}) possui {qtd} parceiros must_together; mesa fixa comporta no máximo {limit_mt} convidados distintos.")
+
+    if alertas:
+        print("[Alerta] Possível gargalo nos must_together:")
+        for msg in alertas:
+            print("  - " + msg)
+    else:
+        print("- Nenhum gargalo teórico de must_together detectado.")
+
+    if must_avoid_pairs:
+        ma_degree = Counter()
+        for a, b in must_avoid_pairs:
+            ma_degree[a] += 1
+            ma_degree[b] += 1
+        mais_ma = sorted(ma_degree.items(), key=lambda x: x[1], reverse=True)[:5]
+        if mais_ma:
+            print("- Participantes com mais restrições must_avoid:")
+            for idx, qtd in mais_ma:
+                print(f"  {names[idx]}: evita {qtd} participante(s)")
+    print("=== Fim do diagnóstico ===\n")
+
+diagnostic_report()
+
+# -------------------------
 # Pré-checagens (fail-fast)
 # -------------------------
 # a) capacidade por mesa só com fixos
-from collections import Counter
 fix_count = Counter(fixed_info.values())
 overcap = {t:c for t,c in fix_count.items() if c > SEATS_PER_TABLE}
 if overcap:
@@ -368,8 +444,19 @@ solver.parameters.max_time_in_seconds = MAX_TIME_S
 solver.parameters.num_search_workers = N_WORKERS
 
 status = solver.Solve(model)
-if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+status_name = solver.StatusName(status)
+obj_val = solver.ObjectiveValue() if status in (cp_model.OPTIMAL, cp_model.FEASIBLE) else None
+bound = solver.BestObjectiveBound()
+print(f"[Solver] Status: {status_name} | Objetivo: {obj_val} | Bound: {bound}")
+
+if status == cp_model.INFEASIBLE:
     raise RuntimeError("Modelo infeasible (verifique pares must_avoid/must_together e distribuição de fixos).")
+if status == cp_model.MODEL_INVALID:
+    raise RuntimeError("Modelo inválido. Revise se todos os dados foram lidos corretamente.")
+if status == cp_model.UNKNOWN:
+    raise RuntimeError(
+        f"Solver não encontrou solução dentro do limite de {MAX_TIME_S}s (status UNKNOWN). "
+        "Considere aumentar NW_MAX_TIME_S ou simplificar as restrições.")
 
 # -------------------------
 # Extrai solução
