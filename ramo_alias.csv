@@ -1,0 +1,31 @@
+entrada,normalizado,macro_ramo
+Adestrador,pet,pet
+Automação,tecnologia,tecnologia
+Coaching,consultoria,consultoria
+Construção e Imobiliário,construcao_imobiliario,construcao_imobiliario
+Consultoria Comercial,consultoria,consultoria
+Corretora de Seguros,seguros,seguros
+Educação,educacao,educacao
+Energia Elétrica,construcao_imobiliario,construcao_imobiliario
+Estética,estetica,estetica
+Eventos,eventos,eventos
+Financeiro,financeiro,financeiro
+Fisioterapia,saude,saude
+Gráfica,marketing,marketing
+Hotel Pet,pet,pet
+Imobiliario,construcao_imobiliario,construcao_imobiliario
+Importação de Vinhos,varejo_especializado,varejo_especializado
+Jurídico,juridico,juridico
+Loja de Veículos,automotivo,automotivo
+Marketing,marketing,marketing
+Nutricionista,saude,saude
+Outros,outros,outros
+Personal Organizer,servicos_pessoais,servicos_pessoais
+Recursos Humanos,rh,rh
+Saúde,saude,saude
+Saúde e Bem Estar,saude,saude
+Segurança e Medicina do Trabalho,seguranca_trabalho,seguranca_trabalho
+Segurança e Prevenção de Incêndios,seguranca_trabalho,seguranca_trabalho
+Tecnologia da Informação (TI),tecnologia,tecnologia
+Terapia,saude,saude
+Visto e Passaporte,documentacao_viagens,documentacao_viagens
